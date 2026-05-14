@@ -4,6 +4,10 @@ This starter is intentionally split into standalone Wrangler Worker projects. Ea
 
 Each stage has its own Worker API in `src/index.ts` and its own React frontend project in `client/`. Wrangler serves the built React app through an `ASSETS` binding with `not_found_handling = "single-page-application"`, so deep links load the app while `/api/agent/demo/*` stays in the Worker.
 
+## Slides
+
+The exported workshop talk deck is available at [`cloudflare-codemode-github-agent-workshop.pdf`](./cloudflare-codemode-github-agent-workshop.pdf).
+
 ## Stages
 
 | Folder | Topic | What changes |
