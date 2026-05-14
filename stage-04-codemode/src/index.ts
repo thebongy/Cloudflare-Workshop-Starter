@@ -157,7 +157,7 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
       })
 
       const codeOutput = extractCodeOutput(result)
-      const generatedCode = codeOutput?.code ?? extractGeneratedCode(result) ?? "No Code Mode output was captured."
+      const generatedCode = extractGeneratedCode(result) ?? extractCodeOutputCode(codeOutput) ?? "No Code Mode output was captured."
       const fallbackResult = summarizeToolCalls(mcpCalls)
       const runResult = codeOutput?.result ?? fallbackResult
       const finalText = result.text.trim() || stringifyResult(runResult)
@@ -350,6 +350,11 @@ function extractCodeOutput(result: unknown): CodeOutput | undefined {
     if (entry.toolName === "codemode" && output) return output
   }
   return extractCodeOutputFromValue(typed.response?.messages)
+}
+
+function extractCodeOutputCode(output: CodeOutput | undefined): string | undefined {
+  const code = (output as { code?: unknown } | undefined)?.code
+  return typeof code === "string" ? code : undefined
 }
 
 function extractCodeOutputFromValue(value: unknown, depth = 0): CodeOutput | undefined {

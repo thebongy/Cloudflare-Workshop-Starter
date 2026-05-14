@@ -25,6 +25,7 @@ export function WorkshopApp() {
   const [prompt, setPrompt] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const pendingRequests = useRef(0)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -82,6 +83,7 @@ export function WorkshopApp() {
   }, [turns, busy])
 
   async function request(path: string, init?: RequestInit) {
+    pendingRequests.current += 1
     setBusy(true)
     setError(null)
     try {
@@ -96,7 +98,8 @@ export function WorkshopApp() {
       setError(err instanceof Error ? err.message : String(err))
       return null
     } finally {
-      setBusy(false)
+      pendingRequests.current = Math.max(0, pendingRequests.current - 1)
+      if (pendingRequests.current === 0) setBusy(false)
     }
   }
 

@@ -233,7 +233,15 @@ async function readJson(request: Request) {
 
 function readModelText(result: unknown) {
   if (typeof result === "string") return result
-  if (result && typeof result === "object" && "response" in result) return String((result as { response: unknown }).response)
+  if (!result || typeof result !== "object") return String(result)
+
+  const record = result as Record<string, unknown>
+  const choices = Array.isArray(record.choices) ? record.choices : []
+  const firstChoice = choices[0] as Record<string, unknown> | undefined
+  const message = firstChoice?.message as Record<string, unknown> | undefined
+  if (typeof message?.content === "string") return message.content
+
+  if (typeof record.response === "string") return record.response
   return JSON.stringify(result)
 }
 
