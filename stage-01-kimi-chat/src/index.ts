@@ -1,7 +1,7 @@
 import { AIChatAgent } from "@cloudflare/ai-chat"
 import { getAgentByName } from "agents"
 
-type Message = { role: "user" | "assistant"; text: string; createdAt: string }
+type Message = { role: "user" | "assistant"; text: string; createdAt: string; artifacts?: unknown[] }
 type State = {
   messages: Message[]
   selectedRepo: string
@@ -111,15 +111,29 @@ async function readJson(request: Request) {
 }
 
 function readModelText(result: unknown) {
-  if (typeof result === "string") return result
-  if (!result || typeof result !== "object") return String(result)
+  return extractText(result) ?? "The model returned no text."
+}
 
-  const record = result as Record<string, unknown>
+function extractText(value: unknown, depth = 0): string | undefined {
+  if (depth > 8 || value === null || value === undefined) return undefined
+  if (typeof value === "string") return value.trim() || undefined
+
+  if (Array.isArray(value)) {
+    const parts = value.map((entry) => extractText(entry, depth + 1)).filter((entry): entry is string => Boolean(entry))
+    return parts.length > 0 ? parts.join("\n") : undefined
+  }
+
+  if (typeof value !== "object") return undefined
+  const record = value as Record<string, unknown>
   const choices = Array.isArray(record.choices) ? record.choices : []
   const firstChoice = choices[0] as Record<string, unknown> | undefined
-  const message = firstChoice?.message as Record<string, unknown> | undefined
-  if (typeof message?.content === "string") return message.content
+  const firstChoiceText = extractText(firstChoice?.message, depth + 1) ?? extractText(firstChoice?.text, depth + 1)
+  if (firstChoiceText) return firstChoiceText
 
-  if (typeof record.response === "string") return record.response
-  return JSON.stringify(result)
+  for (const key of ["response", "text", "content", "answer", "output"]) {
+    const text = extractText(record[key], depth + 1)
+    if (text) return text
+  }
+
+  return undefined
 }

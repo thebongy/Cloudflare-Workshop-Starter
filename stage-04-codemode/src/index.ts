@@ -2,11 +2,11 @@ import { AIChatAgent } from "@cloudflare/ai-chat"
 import { DynamicWorkerExecutor } from "@cloudflare/codemode"
 import { createCodeTool, resolveProvider, type CodeOutput } from "@cloudflare/codemode/ai"
 import { getAgentByName } from "agents"
-import { generateText, stepCountIs, tool, type ToolSet } from "ai"
+import { generateText, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai"
 import { createWorkersAI } from "workers-ai-provider"
 import { z } from "zod"
 
-type Message = { role: "user" | "assistant"; text: string; createdAt: string }
+type Message = { role: "user" | "assistant"; text: string; createdAt: string; artifacts?: MessageArtifact[] }
 type McpConnection = {
   status: string
   serverId: string | null
@@ -23,6 +23,15 @@ type ToolTrace = {
   error?: string
   startedAt: string
   completedAt?: string
+}
+type MessageArtifact = {
+  kind: "tools" | "logs" | "json" | "code"
+  title: string
+  language?: string
+  code?: string
+  data?: unknown
+  lines?: string[]
+  calls?: ToolTrace[]
 }
 type RunTrace = {
   mode: "codemode"
@@ -90,12 +99,13 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
 
       const run = await this.runCodeMode(prompt, repo)
       const text = run.finalText
+      const artifacts = artifactsFromRun(run)
       const nextState: State = {
         ...this.state,
         selectedRepo: repo,
         mode: "codemode",
         mcpConnection: { ...this.connectionFromMcp(), toolCount: run.toolCount, usingMock: run.usingMock },
-        messages: [...this.state.messages, message("user", prompt), message("assistant", text)].slice(-40),
+        messages: [...this.state.messages, message("user", prompt), message("assistant", text, artifacts)].slice(-40),
         lastRun: run,
         runHistory: [run, ...this.state.runHistory].slice(0, 8),
       }
@@ -143,7 +153,7 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
         tools: github.tools,
         executor,
         description:
-          "Execute JavaScript to answer a read-only GitHub maintenance question.\n\nAvailable:\n{{types}}\n\nWrite an async arrow function in JavaScript and return the function itself; do not invoke it with (). Use codemode.* calls, loops, filters, Promise.all, and return compact JSON. GitHub MCP tool results are normalized to parsed JSON when possible. If a result still has MCP content text, parse that text before filtering. Do not assume GitHub REST envelopes like { data } unless the type says so. Do not use fetch or mutate GitHub.",
+          "Execute JavaScript to answer a read-only GitHub maintenance question.\n\nAvailable:\n{{types}}\n\nWrite an async arrow function in JavaScript and return the function itself; do not invoke it with (). Every GitHub tool call must be prefixed with codemode, for example await codemode.tool_SERVER_list_pull_requests(args). Bare tool_* functions do not exist in the sandbox. Use loops, filters, Promise.all, and return compact JSON. GitHub MCP tool results are normalized to parsed JSON when possible. If a result still has MCP content text, parse that text before filtering. Do not assume GitHub REST envelopes like { data } unless the type says so. Do not use fetch or mutate GitHub.",
       })
       const workersai = createWorkersAI({ binding: this.env.AI })
       const result = await generateText({
@@ -152,8 +162,8 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
         toolChoice: { type: "tool", toolName: "codemode" },
         stopWhen: stepCountIs(1),
         system:
-          "You are a read-only GitHub maintainer assistant. Prefer Code Mode for multi-step GitHub inspection. The generated program should be an async arrow function, not an immediately invoked expression. It should do the GitHub calls and return compact structured evidence. GitHub MCP results are usually plain JSON arrays or objects in this workshop; if a result has content text, parse the JSON text before reading fields.",
-        prompt: `Repository: ${repo}\nRequest: ${prompt}\n\nUse Code Mode. Do not invent GitHub data.`,
+          "You are a read-only GitHub maintainer assistant. Prefer Code Mode for multi-step GitHub inspection. The generated program should be an async arrow function, not an immediately invoked expression. It should do the GitHub calls through codemode.toolName(args), never as bare toolName(args), and return compact structured evidence. GitHub MCP results are usually plain JSON arrays or objects in this workshop; if a result has content text, parse the JSON text before reading fields.",
+        messages: conversationMessages(this.state.messages, repo, prompt, "Use Code Mode. Do not invent GitHub data."),
       })
 
       const codeOutput = extractCodeOutput(result)
@@ -162,7 +172,7 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
       const runResult = codeOutput?.result ?? fallbackResult
       const finalText = result.text.trim() || stringifyResult(runResult)
       const sandboxLogs = codeOutput?.logs ?? []
-      logs.push(...sandboxLogs.map((entry) => `sandbox: ${entry}`), `codemode-output-captured=${Boolean(codeOutput)}`, `codemode-host-calls=${mcpCalls.length}`)
+      logs.push(...sandboxLogs.map((entry) => `sandbox: ${entry}`), `agent loop steps=${result.steps.length}`, `codemode-output-captured=${Boolean(codeOutput)}`, `codemode-host-calls=${mcpCalls.length}`, "code mode turn stopped after generated program execution")
 
       return {
         mode: "codemode",
@@ -633,8 +643,33 @@ function disconnectedConnection(): McpConnection {
   return { status: "disconnected", serverId: null, authUrl: null, toolCount: 0, readOnly: true, usingMock: true }
 }
 
-function message(role: Message["role"], text: string): Message {
-  return { role, text, createdAt: new Date().toISOString() }
+function message(role: Message["role"], text: string, artifacts: MessageArtifact[] = []): Message {
+  return { role, text, artifacts, createdAt: new Date().toISOString() }
+}
+
+function artifactsFromRun(run: RunTrace): MessageArtifact[] {
+  const artifacts: MessageArtifact[] = []
+  const generatedCode = run.generatedCode.trim()
+  if (generatedCode) artifacts.push({ kind: "code", title: "Generated Code", language: "js", code: generatedCode })
+  if (run.mcpCalls.length > 0) artifacts.push({ kind: "tools", title: "GitHub MCP Calls", calls: run.mcpCalls })
+  if (run.result !== undefined && !sameText(run.result, run.finalText)) artifacts.push({ kind: "json", title: "Result", data: run.result })
+  if (run.error) artifacts.push({ kind: "json", title: "Error", data: { error: run.error } })
+  if (run.logs.length > 0) artifacts.push({ kind: "logs", title: "Agent Loop", lines: run.logs })
+  return artifacts
+}
+
+function conversationMessages(history: Message[], repo: string, prompt: string, instruction: string): ModelMessage[] {
+  const previous = history.slice(-8).map((entry) => ({
+    role: entry.role,
+    content: entry.text,
+  }))
+  return [
+    ...previous,
+    {
+      role: "user",
+      content: `Repository: ${repo}\nRequest: ${prompt}\n\n${instruction}`,
+    },
+  ] as ModelMessage[]
 }
 
 async function readJson(request: Request) {
@@ -648,6 +683,11 @@ async function readJson(request: Request) {
 function stringifyResult(value: unknown) {
   if (value === undefined) return "No structured result was returned."
   return typeof value === "string" ? value : JSON.stringify(compact(value), null, 2)
+}
+
+function sameText(value: unknown, text: string) {
+  if (typeof value === "string") return value.trim() === text.trim()
+  return stringifyResult(value).trim() === text.trim()
 }
 
 function summarizeToolCalls(calls: ToolTrace[]) {

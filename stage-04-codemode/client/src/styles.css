@@ -12,6 +12,7 @@
   -webkit-font-smoothing: antialiased;
   --surface: #0d0f14;
   --surface-soft: #161922;
+  --surface-raised: #11141b;
   --border: rgba(255, 250, 242, 0.13);
   --text: #fffaf2;
   --muted: rgba(255, 250, 242, 0.56);
@@ -49,12 +50,13 @@ textarea {
 
 .turn {
   display: grid;
-  max-width: min(860px, 92vw);
+  width: min(920px, 92vw);
   gap: 8px;
 }
 
 .turn.user {
   align-self: flex-end;
+  width: min(720px, 92vw);
 }
 
 .turn.assistant {
@@ -67,31 +69,137 @@ textarea {
   text-transform: uppercase;
 }
 
-.turn p,
-.turn pre {
-  margin: 0;
+.turn-content {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 13px 14px;
-  white-space: pre-wrap;
-}
-
-.turn p {
   background: var(--surface);
-  line-height: 1.5;
+  overflow: hidden;
 }
 
-.turn.user p {
+.turn.user .turn-content {
   border-color: rgba(255, 106, 42, 0.42);
   background: rgba(255, 106, 42, 0.13);
 }
 
-.turn pre {
+.turn-content p,
+.artifact p {
+  margin: 0;
+  padding: 13px 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+
+.artifact summary,
+.tool-call summary {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  padding: 0 12px;
+  color: rgba(255, 250, 242, 0.82);
+  font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: uppercase;
+}
+
+.artifact summary::-webkit-details-marker,
+.tool-call summary::-webkit-details-marker {
+  display: none;
+}
+
+.artifact summary::after,
+.tool-call summary::after {
+  content: "+";
+  color: var(--muted);
+}
+
+.artifact[open] > summary::after,
+.tool-call[open] > summary::after {
+  content: "-";
+}
+
+.code-block {
+  margin: 0;
   max-width: 100%;
   overflow-x: auto;
   background: #08090d;
   color: rgba(255, 250, 242, 0.88);
-  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 13px 14px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+}
+
+.turn-content > .code-block {
+  border: 0;
+}
+
+.tool-call-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.tool-call {
+  border: 1px solid rgba(255, 250, 242, 0.1);
+  border-radius: 7px;
+  background: rgba(5, 6, 8, 0.42);
+  overflow: hidden;
+}
+
+.artifact-json {
+  border-top: 1px solid rgba(255, 250, 242, 0.08);
+}
+
+.artifact-json-label {
+  padding: 10px 12px 0;
+  color: var(--muted);
+  font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: uppercase;
+}
+
+.empty-artifact {
+  color: var(--muted);
+}
+
+.error-pill {
+  border: 1px solid rgba(255, 92, 92, 0.45);
+  border-radius: 999px;
+  color: #ffb1b1;
+  padding: 3px 7px;
+}
+
+.tok-keyword {
+  color: #ff9d66;
+}
+
+.tok-string,
+.tok-json-string {
+  color: #7fd3ff;
+}
+
+.tok-number {
+  color: #ffd166;
+}
+
+.tok-comment {
+  color: rgba(255, 250, 242, 0.42);
+}
+
+.tok-punctuation {
+  color: rgba(255, 250, 242, 0.62);
 }
 
 .composer {
@@ -157,8 +265,9 @@ textarea {
     padding-top: 16px;
   }
 
-  .turn {
-    max-width: 100%;
+  .turn,
+  .turn.user {
+    width: 100%;
   }
 
   .composer {

@@ -3,6 +3,7 @@ const stage = "stage-00-ui-shell"
 type Message = {
   role: "user" | "assistant"
   text: string
+  createdAt: string
 }
 
 const state = {
@@ -15,6 +16,7 @@ const state = {
   mcpConnection: { status: "disconnected", toolCount: 0, readOnly: true, usingMock: true },
   messages: [] as Message[],
   lastRun: null,
+  runHistory: [],
 }
 
 interface Env {
@@ -34,14 +36,9 @@ export default {
       const prompt = String(body.prompt ?? "").trim()
       const text =
         "Stage 00 is just the UI shell. Next we add an AIChatAgent Durable Object and Kimi K2.5 so this same chat box speaks to a model."
+      state.messages = [...state.messages, message("user", prompt || "Hello"), message("assistant", text)].slice(-40)
       return Response.json({
-        state: {
-          ...state,
-          messages: [
-            { role: "user", text: prompt || "Hello" },
-            { role: "assistant", text },
-          ],
-        },
+        state,
         text,
       })
     }
@@ -59,6 +56,10 @@ function endpoints(origin: string) {
     state: `${origin}/api/agent/demo/state`,
     chat: `${origin}/api/agent/demo/chat`,
   }
+}
+
+function message(role: Message["role"], text: string): Message {
+  return { role, text, createdAt: new Date().toISOString() }
 }
 
 async function readJson(request: Request) {

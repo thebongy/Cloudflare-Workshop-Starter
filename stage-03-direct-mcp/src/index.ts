@@ -1,10 +1,10 @@
 import { AIChatAgent } from "@cloudflare/ai-chat"
 import { getAgentByName } from "agents"
-import { generateText, stepCountIs, tool, type ToolSet } from "ai"
+import { generateText, stepCountIs, tool, type ModelMessage, type ToolSet } from "ai"
 import { createWorkersAI } from "workers-ai-provider"
 import { z } from "zod"
 
-type Message = { role: "user" | "assistant"; text: string; createdAt: string }
+type Message = { role: "user" | "assistant"; text: string; createdAt: string; artifacts?: MessageArtifact[] }
 type McpConnection = {
   status: string
   serverId: string | null
@@ -21,6 +21,15 @@ type ToolTrace = {
   error?: string
   startedAt: string
   completedAt?: string
+}
+type MessageArtifact = {
+  kind: "tools" | "logs" | "json" | "code"
+  title: string
+  language?: string
+  code?: string
+  data?: unknown
+  lines?: string[]
+  calls?: ToolTrace[]
 }
 type RunTrace = {
   mode: "direct-mcp"
@@ -86,12 +95,13 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
 
       const run = await this.runDirectMcp(prompt, repo)
       const text = run.result
+      const artifacts = artifactsFromRun(run)
       const nextState: State = {
         ...this.state,
         selectedRepo: repo,
         mode: "direct-mcp",
         mcpConnection: { ...this.connectionFromMcp(), toolCount: run.toolCount, usingMock: run.usingMock },
-        messages: [...this.state.messages, message("user", prompt), message("assistant", text)].slice(-40),
+        messages: [...this.state.messages, message("user", prompt), message("assistant", text, artifacts)].slice(-40),
         lastRun: run,
         runHistory: [run, ...this.state.runHistory].slice(0, 8),
       }
@@ -134,14 +144,14 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
       const result = await generateText({
         model: workersai(modelName),
         tools: github.tools,
-        stopWhen: stepCountIs(6),
+        stopWhen: stepCountIs(8),
         system:
-          "You are a read-only GitHub maintainer assistant. Use the available GitHub MCP tools before answering. Prefer concise findings with concrete PR, issue, check, workflow, or release references.",
-        prompt: `Repository: ${repo}\nRequest: ${prompt}\n\nUse direct tool calls. Do not invent GitHub data.`,
+          "You are a read-only GitHub maintainer assistant. Use the available GitHub MCP tools before answering. Prefer concise findings with concrete PR, issue, check, workflow, or release references. Continue using tools until you have enough evidence, then stop calling tools and answer the user.",
+        messages: conversationMessages(this.state.messages, repo, prompt, "Use direct tool calls. Do not invent GitHub data."),
       })
 
       const text = result.text.trim() || summarizeUnknown(result.toolResults)
-      logs.push(`model steps=${result.steps.length}`, `direct tool calls=${mcpCalls.length}`)
+      logs.push(`agent loop steps=${result.steps.length}`, `direct tool calls=${mcpCalls.length}`, "agent loop stopped after final assistant response")
       return {
         mode: "direct-mcp",
         prompt,
@@ -467,8 +477,30 @@ function disconnectedConnection(): McpConnection {
   return { status: "disconnected", serverId: null, authUrl: null, toolCount: 0, readOnly: true, usingMock: true }
 }
 
-function message(role: Message["role"], text: string): Message {
-  return { role, text, createdAt: new Date().toISOString() }
+function message(role: Message["role"], text: string, artifacts: MessageArtifact[] = []): Message {
+  return { role, text, artifacts, createdAt: new Date().toISOString() }
+}
+
+function artifactsFromRun(run: RunTrace): MessageArtifact[] {
+  const artifacts: MessageArtifact[] = []
+  if (run.mcpCalls.length > 0) artifacts.push({ kind: "tools", title: "GitHub MCP Calls", calls: run.mcpCalls })
+  if (run.error) artifacts.push({ kind: "json", title: "Error", data: { error: run.error } })
+  if (run.logs.length > 0) artifacts.push({ kind: "logs", title: "Agent Loop", lines: run.logs })
+  return artifacts
+}
+
+function conversationMessages(history: Message[], repo: string, prompt: string, instruction: string): ModelMessage[] {
+  const previous = history.slice(-8).map((entry) => ({
+    role: entry.role,
+    content: entry.text,
+  }))
+  return [
+    ...previous,
+    {
+      role: "user",
+      content: `Repository: ${repo}\nRequest: ${prompt}\n\n${instruction}`,
+    },
+  ] as ModelMessage[]
 }
 
 async function readJson(request: Request) {
@@ -563,4 +595,3 @@ const seedTags = [
   { name: "v4.2026.4", date: "2026-04-29T00:00:00Z" },
   { name: "v4.2026.3", date: "2026-03-27T00:00:00Z" },
 ] as const
-
