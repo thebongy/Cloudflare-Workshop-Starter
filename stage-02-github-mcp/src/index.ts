@@ -153,8 +153,8 @@ async function forwardToAgent(request: Request, env: Env) {
   const path = rest.length ? `/${rest.join("/")}` : "/state"
   const target = new URL(path, url.origin)
   target.search = url.search
-  const stub = await getAgentByName<Env, GitHubAgent>(env.GitHubAgent, name)
-  return stub.fetch(new Request(target, request))
+  const agent = await getAgentByName<Env, GitHubAgent>(env.GitHubAgent, name)
+  return agent.fetch(new Request(target, request))
 }
 
 function disconnected(): McpConnection {

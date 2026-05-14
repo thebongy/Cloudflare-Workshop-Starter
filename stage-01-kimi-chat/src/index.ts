@@ -74,8 +74,8 @@ async function forwardToAgent(request: Request, env: Env) {
   const url = new URL(request.url)
   const [, , , name = "demo", ...rest] = url.pathname.split("/")
   const path = rest.length ? `/${rest.join("/")}` : "/state"
-  const stub = await getAgentByName<Env, GitHubAgent>(env.GitHubAgent, name)
-  return stub.fetch(new Request(new URL(path, url.origin), request))
+  const agent = await getAgentByName<Env, GitHubAgent>(env.GitHubAgent, name)
+  return agent.fetch(new Request(new URL(path, url.origin), request))
 }
 
 function message(role: Message["role"], text: string): Message {
