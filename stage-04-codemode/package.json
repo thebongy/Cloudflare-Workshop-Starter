@@ -1,0 +1,31 @@
+{
+  "name": "github-mcp-codemode-stage-04",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "client:build": "vite build",
+    "dev": "npm run client:build && wrangler dev --config wrangler.jsonc",
+    "deploy": "npm run client:build && wrangler deploy --config wrangler.jsonc",
+    "check": "tsc --noEmit && tsc -p tsconfig.client.json --noEmit && npm run client:build"
+  },
+  "dependencies": {
+    "@cloudflare/ai-chat": "^0.4.0",
+    "@cloudflare/codemode": "^0.3.4",
+    "agents": "^0.10.0",
+    "ai": "^6.0.154",
+    "workers-ai-provider": "^3.1.10",
+    "zod": "^4.3.6",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260409.1",
+    "typescript": "^6.0.2",
+    "wrangler": "^4.81.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.8"
+  }
+}
