@@ -1,4 +1,7 @@
+import { Badge, Button, InputArea, LayerCard } from "@cloudflare/kumo"
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 type Artifact =
   | { kind: "code"; title?: string; code?: string; language?: string }
@@ -35,6 +38,8 @@ export function WorkshopApp() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [prompt, setPrompt] = useState("")
   const [busy, setBusy] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([])
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -43,11 +48,12 @@ export function WorkshopApp() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" })
-  }, [snapshot, busy])
+  }, [snapshot, optimisticMessages, isGenerating])
 
-  const messages = snapshot?.state?.messages?.length
+  const savedMessages = snapshot?.state?.messages?.length
     ? snapshot.state.messages
     : [{ role: "assistant" as const, text: "Use the starter prompt to begin." }]
+  const messages = optimisticMessages.length ? [...savedMessages, ...optimisticMessages] : savedMessages
   const selectedRepo = snapshot?.state?.selectedRepo ?? "cloudflare/workers-sdk"
 
   async function load() {
@@ -55,7 +61,7 @@ export function WorkshopApp() {
     if (next?.state && "mcpConnection" in next.state) await request("/mcp/connect", { method: "POST" })
   }
 
-  async function request(path: string, init?: RequestInit) {
+  async function request(path: string, init?: RequestInit, fallbackMessages: Message[] = []) {
     setBusy(true)
     try {
       const response = await fetch(`${apiBase}${path}`, init)
@@ -64,10 +70,15 @@ export function WorkshopApp() {
       setSnapshot(payload as Snapshot)
       return payload as Snapshot
     } catch (error) {
-      setSnapshot({
-        state: {
-          messages: [{ role: "assistant", text: error instanceof Error ? error.message : String(error) }],
-        },
+      setSnapshot((current) => {
+        const currentMessages = current?.state?.messages?.length ? current.state.messages : []
+        return {
+          ...current,
+          state: {
+            ...current?.state,
+            messages: [...currentMessages, ...fallbackMessages, { role: "assistant", text: error instanceof Error ? error.message : String(error) }],
+          },
+        }
       })
       return null
     } finally {
@@ -79,55 +90,83 @@ export function WorkshopApp() {
     event.preventDefault()
     const text = prompt.trim()
     if (!text || busy) return
+    const optimisticMessage: Message = { role: "user", text }
+    setOptimisticMessages([optimisticMessage])
+    setIsGenerating(true)
     setPrompt("")
-    await request("/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt: text, repo: selectedRepo }),
-    })
+    try {
+      await request(
+        "/chat",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt: text, repo: selectedRepo }),
+        },
+        [optimisticMessage],
+      )
+    } finally {
+      setOptimisticMessages([])
+      setIsGenerating(false)
+    }
   }
 
   return (
     <main className="chat-shell">
-      <section className="turns" aria-live="polite">
-        {messages.map((message, index) => (
-          <article className={`turn ${message.role}`} key={index}>
-            <div className="label">{message.role === "user" ? "You" : "Agent"}</div>
-            <div className="bubble">{renderText(message.text)}</div>
-            {message.artifacts?.map((artifact, artifactIndex) => (
-              <ArtifactView artifact={artifact} key={artifactIndex} />
-            ))}
-          </article>
-        ))}
-        {busy && (
-          <article className="turn assistant">
-            <div className="label">Agent</div>
-            <div className="bubble">Working...</div>
-          </article>
-        )}
-        <div ref={endRef} />
-      </section>
+      <section className="agent-frame" aria-label="Github MCP Agent">
+        <header className="app-header">
+          <div>
+            <Badge variant="orange">{snapshot?.stageLabel ?? "Workshop"}</Badge>
+            <h1>Github MCP Agent</h1>
+          </div>
+          <Badge variant="outline">{selectedRepo}</Badge>
+        </header>
 
-      <form className="composer" onSubmit={submit}>
-        <button type="button" onClick={() => setPrompt(starterPrompt)} disabled={busy}>
-          Starter
-        </button>
-        <textarea
-          value={prompt}
-          rows={2}
-          onChange={(event) => setPrompt(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault()
-              event.currentTarget.form?.requestSubmit()
-            }
-          }}
-          placeholder="Ask the agent..."
-        />
-        <button type="submit" disabled={busy || !prompt.trim()}>
-          Send
-        </button>
-      </form>
+        <LayerCard className="chat-card">
+          <section className="turns" aria-live="polite">
+            {messages.map((message, index) => (
+              <article className={`turn ${message.role}`} key={index}>
+                <Badge variant={message.role === "user" ? "orange" : "secondary"}>{message.role === "user" ? "You" : "Agent"}</Badge>
+                <div className="bubble">{renderText(message.text)}</div>
+                {message.artifacts?.map((artifact, artifactIndex) => (
+                  <ArtifactView artifact={artifact} key={artifactIndex} />
+                ))}
+              </article>
+            ))}
+            {isGenerating && (
+              <article className="turn assistant pending">
+                <Badge variant="secondary">Agent</Badge>
+                <div className="bubble generating-bubble">
+                  <p className="generating-text">Generating...</p>
+                </div>
+              </article>
+            )}
+            <div ref={endRef} />
+          </section>
+
+          <form className="composer" onSubmit={submit}>
+            <Button type="button" variant="secondary" onClick={() => setPrompt(starterPrompt)} disabled={busy}>
+              Starter
+            </Button>
+            <InputArea
+              aria-label="Ask the agent"
+              className="prompt-input"
+              value={prompt}
+              rows={2}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault()
+                  event.currentTarget.form?.requestSubmit()
+                }
+              }}
+              placeholder="Ask the agent..."
+            />
+            <Button type="submit" variant="primary" disabled={busy || !prompt.trim()}>
+              Send
+            </Button>
+          </form>
+        </LayerCard>
+      </section>
     </main>
   )
 }
@@ -170,9 +209,41 @@ function renderText(text: string) {
   const parsed = parseJson(text)
   if (parsed !== undefined) return codeBlock(parsed)
 
-  const chunks = text.split(/```(?:\w+)?\n?|```/g).filter(Boolean)
-  if (chunks.length > 1) return chunks.map((chunk, index) => (index % 2 ? codeBlock(chunk.trim(), "text", index) : <p key={index}>{chunk.trim()}</p>))
-  return <p>{text}</p>
+  return <MarkdownText text={text} />
+}
+
+function MarkdownText({ text }: { text: string }) {
+  return (
+    <div className="markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          pre({ children }) {
+            return <>{children}</>
+          },
+          code({ className, children, ...props }) {
+            const language = /language-(\w+)/.exec(className ?? "")?.[1]
+            const value = String(children).replace(/\n$/, "")
+            if (language) return codeBlock(value, language)
+            return (
+              <code className="inline-code" {...props}>
+                {children}
+              </code>
+            )
+          },
+          a({ children, ...props }) {
+            return (
+              <a {...props} target="_blank" rel="noreferrer">
+                {children}
+              </a>
+            )
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
 }
 
 function codeBlock(value: unknown, language = "json", key?: number) {
