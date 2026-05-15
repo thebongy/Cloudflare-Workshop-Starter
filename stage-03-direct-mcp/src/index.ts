@@ -10,12 +10,18 @@ type ToolCall = {
   error?: string
 }
 
+type Artifact = { kind: "tools"; title: string; calls: ToolCall[] }
+
 type Message = {
   role: "user" | "assistant"
   text: string
   createdAt: string
-  artifacts?: Array<{ kind: "tools"; title: string; calls: ToolCall[] }>
+  artifacts?: Artifact[]
+  transient?: boolean
 }
+
+type StreamEvent = { type: "message"; message: Message } | { type: "snapshot"; snapshot: unknown }
+type StreamSend = (event: StreamEvent) => void
 
 type McpConnection = {
   status: string
@@ -39,7 +45,7 @@ interface Env extends Cloudflare.Env {
   GITHUB_MCP_PAT?: string
 }
 
-const model = "@cf/moonshotai/kimi-k2.5"
+const model = "@cf/moonshotai/kimi-k2.6"
 const githubMcpUrl = "https://api.githubcopilot.com/mcp/"
 
 export class GitHubAgent extends AIChatAgent<Env, State> {
@@ -56,19 +62,17 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
     if (url.pathname === "/callback") return this.handleMcpCallback(request)
     if (url.pathname === "/state") return Response.json(this.snapshot(await this.refreshMcp()))
 
+    if (url.pathname === "/clear" && request.method === "POST") {
+      const state = { ...this.state, messages: [], lastRun: null, mcpConnection: this.connection() }
+      this.setState(state)
+      return Response.json(this.snapshot(state))
+    }
+
     if (url.pathname === "/chat" && request.method === "POST") {
       const { prompt, repo = this.state.selectedRepo } = await request.json<{ prompt?: string; repo?: string }>()
       if (!prompt) return Response.json({ error: "Missing prompt" }, { status: 400 })
 
-      const run = await this.runDirectMcp(prompt, repo)
-      const messages = [
-        ...this.state.messages,
-        message("user", prompt),
-        message("assistant", run.result, [{ kind: "tools", title: "GitHub MCP calls", calls: run.mcpCalls }]),
-      ].slice(-20)
-      const state = { ...this.state, selectedRepo: repo, messages, lastRun: run, mcpConnection: this.connection() }
-      this.setState(state)
-      return Response.json(this.snapshot(state))
+      return this.streamDirectMcpChat(prompt, repo)
     }
 
     if (url.pathname === "/mcp/connect" && request.method === "POST") {
@@ -90,9 +94,53 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
     return Response.json({ error: "Not found" }, { status: 404 })
   }
 
-  private async runDirectMcp(prompt: string, repo: string) {
+  private streamDirectMcpChat(prompt: string, repo: string): Response {
+    const encoder = new TextEncoder()
+
+    return new Response(
+      new ReadableStream({
+        start: async (controller) => {
+          const liveMessages: Message[] = []
+          const send: StreamSend = (event) => {
+            if (event.type === "message") {
+              const liveMessage = { ...event.message, transient: true }
+              liveMessages.push(liveMessage)
+              controller.enqueue(encoder.encode(`${JSON.stringify({ ...event, message: liveMessage })}\n`))
+              return
+            }
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+          }
+
+          try {
+            send({ type: "message", message: message("assistant", "Starting the direct MCP agent loop.") })
+            const run = await this.runDirectMcp(prompt, repo, send)
+            const messages = [
+              ...this.state.messages,
+              message("user", prompt),
+              ...liveMessages,
+              message("assistant", run.result, [{ kind: "tools", title: "GitHub MCP calls", calls: run.mcpCalls }]),
+            ].slice(-40)
+            const state = { ...this.state, selectedRepo: repo, messages, lastRun: run, mcpConnection: this.connection() }
+            this.setState(state)
+            send({ type: "snapshot", snapshot: this.snapshot(state) })
+          } catch (error) {
+            const run = { mcpCalls: [], result: error instanceof Error ? error.message : String(error) }
+            const messages = [...this.state.messages, message("user", prompt), ...liveMessages, message("assistant", run.result)].slice(-40)
+            const state = { ...this.state, selectedRepo: repo, messages, lastRun: run, mcpConnection: this.connection() }
+            this.setState(state)
+            send({ type: "snapshot", snapshot: this.snapshot(state) })
+          } finally {
+            controller.close()
+          }
+        },
+      }),
+      { headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" } },
+    )
+  }
+
+  private async runDirectMcp(prompt: string, repo: string, send?: StreamSend) {
     const mcpCalls: ToolCall[] = []
-    const tools = await this.githubTools(mcpCalls)
+    const tools = await this.githubTools(mcpCalls, send)
 
     if (Object.keys(tools).length === 0) {
       return { mcpCalls, result: "GitHub MCP is not connected yet. Set GITHUB_MCP_PAT, restart Wrangler, and connect again." }
@@ -102,20 +150,25 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
     const result = await generateText({
       model: workersai(model),
       tools,
-      stopWhen: stepCountIs(8),
-      system: "You are a read-only GitHub maintainer assistant. Use GitHub MCP tools before answering.",
+      stopWhen: stepCountIs(10),
+      prepareStep: ({ stepNumber }) => {
+        send?.({ type: "message", message: message("assistant", `Agent turn ${stepNumber + 1}: choosing a GitHub MCP tool or final answer.`) })
+        return stepNumber === 0 ? { toolChoice: "required" } : {}
+      },
+      system:
+        "You are a read-only GitHub maintainer assistant. Use GitHub MCP tools before answering. After every tool result, either call another tool if more evidence is needed or stop by writing a clean Markdown final answer for the user. Do not output raw JSON, raw tool responses, generated code, internal tool names, or MCP implementation details in the final answer. Interpret the data and include concrete PR or issue numbers, statuses, and next actions when present.",
       messages: conversation(this.state.messages, repo, prompt),
     })
 
     return {
       mcpCalls,
-      result: result.text.trim() || "The model finished without a text response. Inspect the tool calls above.",
+      result: cleanFinalText(result.text.trim()),
     }
   }
 
-  private async githubTools(calls: ToolCall[]): Promise<ToolSet> {
+  private async githubTools(calls: ToolCall[], send?: StreamSend): Promise<ToolSet> {
     await this.mcp.waitForConnections({ timeout: 3_000 }).catch(() => undefined)
-    return traceTools(readonlyTools(this.mcp.getAITools({ serverName: "github" })), calls)
+    return traceTools(readonlyTools(this.mcp.getAITools({ serverName: "github" })), calls, send)
   }
 
   private async connectGitHubMcp(request: Request): Promise<McpConnection> {
@@ -191,7 +244,7 @@ async function forwardToAgent(request: Request, env: Env) {
   return agent.fetch(new Request(target, request))
 }
 
-function traceTools(tools: ToolSet, calls: ToolCall[]): ToolSet {
+function traceTools(tools: ToolSet, calls: ToolCall[], send?: StreamSend): ToolSet {
   return Object.fromEntries(
     Object.entries(tools).map(([name, tool]) => {
       const execute = (tool as { execute?: (input: unknown, options: unknown) => Promise<unknown> }).execute
@@ -204,12 +257,15 @@ function traceTools(tools: ToolSet, calls: ToolCall[]): ToolSet {
           execute: async (input: unknown, options: unknown) => {
             const call: ToolCall = { name, input: compact(input) }
             calls.push(call)
+            send?.({ type: "message", message: message("assistant", `Calling \`${name}\`.`, [{ kind: "tools", title: "MCP call", calls: [call] }]) })
             try {
               const output = await execute(input, options)
               call.output = compact(output)
+              send?.({ type: "message", message: message("assistant", `Finished \`${name}\`.`, [{ kind: "tools", title: "MCP result", calls: [call] }]) })
               return output
             } catch (error) {
               call.error = error instanceof Error ? error.message : String(error)
+              send?.({ type: "message", message: message("assistant", `\`${name}\` failed.`, [{ kind: "tools", title: "MCP error", calls: [call] }]) })
               throw error
             }
           },
@@ -226,7 +282,7 @@ function readonlyTools(tools: ToolSet): ToolSet {
 
 function conversation(history: Message[], repo: string, prompt: string): ModelMessage[] {
   return [
-    ...history.slice(-6).map((entry) => ({ role: entry.role, content: entry.text })),
+    ...history.filter((entry) => !entry.transient).slice(-6).map((entry) => ({ role: entry.role, content: entry.text })),
     { role: "user", content: `Repository: ${repo}\nRequest: ${prompt}` },
   ] as ModelMessage[]
 }
@@ -241,6 +297,21 @@ function githubHeaders(token: string): HeadersInit {
 
 function message(role: Message["role"], text: string, artifacts: Message["artifacts"] = []): Message {
   return { role, text, artifacts, createdAt: new Date().toISOString() }
+}
+
+function cleanFinalText(text: string): string {
+  if (text && !looksRawJson(text)) return text
+  return "I finished the repository inspection and found structured results. Expand the tool-call details for the raw data."
+}
+
+function looksRawJson(text: string): boolean {
+  if (!/^\s*[\[{]/.test(text)) return false
+  try {
+    JSON.parse(text)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function compact(value: unknown): unknown {

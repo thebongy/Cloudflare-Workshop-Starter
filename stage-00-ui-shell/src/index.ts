@@ -21,6 +21,11 @@ export default {
       return Response.json(snapshot())
     }
 
+    if (url.pathname === "/api/agent/demo/clear" && request.method === "POST") {
+      state.messages = []
+      return Response.json(snapshot())
+    }
+
     if (url.pathname === "/api/agent/demo/chat" && request.method === "POST") {
       const { prompt } = await request.json<{ prompt?: string }>()
       state.messages.push(message("user", prompt ?? "Hello"))

@@ -9,7 +9,7 @@ Each stage has its own Worker API in `src/index.ts` and its own React frontend p
 | Folder | Topic | What changes |
 | --- | --- | --- |
 | `stage-00-ui-shell` | Worker + UI shell | Serves the React chat UI from the Worker. |
-| `stage-01-kimi-chat` | Workers AI chat | Adds an `AIChatAgent` session and Kimi K2.5 responses. |
+| `stage-01-kimi-chat` | Workers AI chat | Adds an `AIChatAgent` session and Kimi K2.6 responses. |
 | `stage-02-github-mcp` | GitHub MCP connection | Adds read-only GitHub MCP connect/status/disconnect endpoints. |
 | `stage-03-direct-mcp` | Direct MCP baseline | Passes GitHub MCP tools directly to the model and records the calls. |
 | `stage-04-codemode` | Code Mode over GitHub MCP | Wraps GitHub MCP tools with Code Mode and shows generated code, calls, and result. |
@@ -17,7 +17,7 @@ Each stage has its own Worker API in `src/index.ts` and its own React frontend p
 ## Run A Stage
 
 ```sh
-cd workshop/starter/stage-04-codemode
+cd stage-04-codemode
 npm install
 GITHUB_MCP_PAT="$NPM_TOKEN" npm run dev
 ```
@@ -29,14 +29,14 @@ Then open the local URL from Wrangler.
 ## Check A Stage
 
 ```sh
-cd workshop/starter/stage-04-codemode
+cd stage-04-codemode
 npm run check
 ```
 
 ## Deploy The Final Stage
 
 ```sh
-cd workshop/starter/stage-04-codemode
+cd stage-04-codemode
 npm install
 npx wrangler secret put GITHUB_MCP_PAT
 npm run deploy

@@ -28,7 +28,7 @@ interface Env extends Cloudflare.Env {
   GITHUB_MCP_PAT?: string
 }
 
-const model = "@cf/moonshotai/kimi-k2.5"
+const model = "@cf/moonshotai/kimi-k2.6"
 const githubMcpUrl = "https://api.githubcopilot.com/mcp/"
 
 export class GitHubAgent extends AIChatAgent<Env, State> {
@@ -43,6 +43,12 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
 
     if (url.pathname === "/callback") return this.handleMcpCallback(request)
     if (url.pathname === "/state") return Response.json(this.snapshot(await this.refreshMcp()))
+
+    if (url.pathname === "/clear" && request.method === "POST") {
+      const state = { ...this.state, messages: [], mcpConnection: this.connection() }
+      this.setState(state)
+      return Response.json(this.snapshot(state))
+    }
 
     if (url.pathname === "/chat" && request.method === "POST") {
       const { prompt, repo = this.state.selectedRepo } = await request.json<{ prompt?: string; repo?: string }>()

@@ -18,7 +18,7 @@ interface Env extends Cloudflare.Env {
   ASSETS: Fetcher
 }
 
-const model = "@cf/moonshotai/kimi-k2.5"
+const model = "@cf/moonshotai/kimi-k2.6"
 
 export class GitHubAgent extends AIChatAgent<Env, State> {
   initialState: State = {
@@ -30,6 +30,12 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
     const url = new URL(request.url)
 
     if (url.pathname === "/state") return Response.json(this.snapshot())
+
+    if (url.pathname === "/clear" && request.method === "POST") {
+      const state = { ...this.state, messages: [] }
+      this.setState(state)
+      return Response.json(this.snapshot(state))
+    }
 
     if (url.pathname === "/chat" && request.method === "POST") {
       const { prompt, repo = this.state.selectedRepo } = await request.json<{ prompt?: string; repo?: string }>()
