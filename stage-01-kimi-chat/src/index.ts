@@ -1,5 +1,7 @@
+import { createOpenAI } from "@ai-sdk/openai"
 import { AIChatAgent } from "@cloudflare/ai-chat"
 import { getAgentByName } from "agents"
+import { generateText, type ModelMessage } from "ai"
 
 type Message = {
   role: "user" | "assistant"
@@ -16,9 +18,11 @@ interface Env extends Cloudflare.Env {
   AI: Ai
   GitHubAgent: DurableObjectNamespace<GitHubAgent>
   ASSETS: Fetcher
+  OPENAI_API_KEY?: string
 }
 
-const model = "@cf/moonshotai/kimi-k2.6"
+const workersAiModel = "@cf/moonshotai/kimi-k2.6"
+const openaiModel = "gpt-5.5"
 
 export class GitHubAgent extends AIChatAgent<Env, State> {
   initialState: State = {
@@ -41,15 +45,11 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
       const { prompt, repo = this.state.selectedRepo } = await request.json<{ prompt?: string; repo?: string }>()
       if (!prompt) return Response.json({ error: "Missing prompt" }, { status: 400 })
 
-      const result = await this.env.AI.run(model, {
-        messages: [
-          { role: "system", content: "You are a concise GitHub repository assistant. MCP tools are added in later stages." },
-          ...this.state.messages.slice(-6).map((entry) => ({ role: entry.role, content: entry.text })),
-          { role: "user", content: `Repository: ${repo}\n${prompt}` },
-        ],
-      })
-
-      const text = readText(result)
+      const text = await this.chat([
+        { role: "system", content: "You are a concise GitHub repository assistant. MCP tools are added in later stages." },
+        ...this.state.messages.slice(-6).map((entry) => ({ role: entry.role, content: entry.text })),
+        { role: "user", content: `Repository: ${repo}\n${prompt}` },
+      ] as ModelMessage[])
       const messages = [...this.state.messages, message("user", prompt), message("assistant", text)].slice(-20)
       this.setState({ messages, selectedRepo: repo })
       return Response.json(this.snapshot({ messages, selectedRepo: repo }))
@@ -62,9 +62,20 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
     return {
       stage: "stage-01-kimi-chat",
       stageLabel: "Kimi chat agent",
-      model,
+      model: modelName(this.env),
       state,
     }
+  }
+
+  private async chat(messages: ModelMessage[]): Promise<string> {
+    if (this.env.OPENAI_API_KEY) {
+      const openai = createOpenAI({ apiKey: this.env.OPENAI_API_KEY })
+      const result = await generateText({ model: openai(openaiModel), messages })
+      return result.text.trim()
+    }
+
+    const result = await this.env.AI.run(workersAiModel, { messages })
+    return readText(result)
   }
 }
 
@@ -91,4 +102,8 @@ function message(role: Message["role"], text: string): Message {
 function readText(result: unknown): string {
   const record = result as { choices?: Array<{ message?: { content?: string }; text?: string }>; response?: string; text?: string }
   return record.choices?.[0]?.message?.content ?? record.choices?.[0]?.text ?? record.response ?? record.text ?? JSON.stringify(result)
+}
+
+function modelName(env: Env): string {
+  return env.OPENAI_API_KEY ? openaiModel : workersAiModel
 }

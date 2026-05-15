@@ -26,6 +26,8 @@ Then open the local URL from Wrangler.
 
 `npm run dev` builds `client/` into `dist/client` and starts `wrangler dev --config wrangler.jsonc` so the React app and Worker API run from the same local Worker.
 
+Stages 01-04 use Workers AI Kimi K2.6 by default. To run the same examples with OpenAI instead, add `OPENAI_API_KEY=...` to that stage's `.dev.vars`; the Worker will use `gpt-5.5` whenever the key is present.
+
 ## Check A Stage
 
 ```sh

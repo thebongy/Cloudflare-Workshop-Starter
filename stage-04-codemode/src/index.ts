@@ -1,8 +1,9 @@
+import { createOpenAI } from "@ai-sdk/openai"
 import { AIChatAgent } from "@cloudflare/ai-chat"
 import { DynamicWorkerExecutor } from "@cloudflare/codemode"
 import { createCodeTool, type CodeOutput } from "@cloudflare/codemode/ai"
 import { getAgentByName } from "agents"
-import { generateText, stepCountIs, type ModelMessage, type ToolSet } from "ai"
+import { generateText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from "ai"
 import { createWorkersAI } from "workers-ai-provider"
 
 type ToolCall = {
@@ -56,9 +57,11 @@ interface Env extends Cloudflare.Env {
   LOADER: WorkerLoader
   ASSETS: Fetcher
   GITHUB_MCP_PAT?: string
+  OPENAI_API_KEY?: string
 }
 
-const model = "@cf/moonshotai/kimi-k2.6"
+const workersAiModel = "@cf/moonshotai/kimi-k2.6"
+const openaiModel = "gpt-5.5"
 const githubMcpUrl = "https://api.githubcopilot.com/mcp/"
 
 export class GitHubAgent extends AIChatAgent<Env, State> {
@@ -184,9 +187,8 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
         "Return compact JSON. Do not mutate GitHub.",
       ].join("\n"),
     }), codeRuns, send)
-    const workersai = createWorkersAI({ binding: this.env.AI })
     const result = await generateText({
-      model: workersai(model),
+      model: languageModel(this.env),
       tools: { codemode },
       stopWhen: stepCountIs(8),
       prepareStep: ({ stepNumber }) => {
@@ -262,7 +264,7 @@ export class GitHubAgent extends AIChatAgent<Env, State> {
     return {
       stage: "stage-04-codemode",
       stageLabel: "Code Mode over GitHub MCP",
-      model,
+      model: modelName(this.env),
       state,
     }
   }
@@ -485,6 +487,20 @@ function cleanFinalText(text: string, value: unknown): string {
   if (text && !looksRawJson(text)) return text
   if (value == null) return "I finished the repository inspection, but there was not enough structured data to summarize cleanly."
   return "I finished the repository inspection and found structured results. Expand the Result section for the raw details."
+}
+
+function languageModel(env: Env): LanguageModel {
+  if (env.OPENAI_API_KEY) {
+    const openai = createOpenAI({ apiKey: env.OPENAI_API_KEY })
+    return openai(openaiModel)
+  }
+
+  const workersai = createWorkersAI({ binding: env.AI })
+  return workersai(workersAiModel)
+}
+
+function modelName(env: Env): string {
+  return env.OPENAI_API_KEY ? openaiModel : workersAiModel
 }
 
 function looksRawJson(text: string): boolean {

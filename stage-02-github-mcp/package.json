@@ -10,10 +10,12 @@
     "check": "tsc --noEmit && tsc -p tsconfig.client.json --noEmit && npm run client:build"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.63",
     "@cloudflare/ai-chat": "^0.4.0",
     "@cloudflare/kumo": "^2.2.0",
     "@phosphor-icons/react": "^2.1.10",
     "agents": "^0.10.0",
+    "ai": "^6.0.182",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
